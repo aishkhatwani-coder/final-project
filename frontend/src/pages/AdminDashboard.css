@@ -942,6 +942,27 @@
   text-align: right;
 }
 
+.admin-payment-history > div > .admin-client-payment-details {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+}
+
+.admin-client-payment-details strong {
+  color: #333;
+  font-size: 12px;
+}
+
+.admin-client-payment-details small {
+  color: #777;
+  overflow-wrap: anywhere;
+}
+
+.admin-payment-history > div > .admin-client-payment-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .admin-payment-empty {
   color: #777;
 }

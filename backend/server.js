@@ -691,12 +691,12 @@ app.post('/api/payments', authenticate, async (req, res) => {
       if (!consultation.agreedProjectAmount || consultation.agreedProjectAmount !== totalProjectAmount) {
         return res.status(400).json({ message: 'The project total must match the agreed amount set by the studio.' });
       }
-      const completedPayments = await Payment.find({
+      const reservedPayments = await Payment.find({
         consultationId: consultation._id,
-        status: 'Completed'
+        status: { $in: ['Pending', 'Completed'] }
       }).select('amountPaid');
-      const alreadyReceived = completedPayments.reduce((sum, entry) => sum + entry.amountPaid, 0);
-      if (alreadyReceived + amountPaid > consultation.agreedProjectAmount) {
+      const alreadyReserved = reservedPayments.reduce((sum, entry) => sum + entry.amountPaid, 0);
+      if (alreadyReserved + amountPaid > consultation.agreedProjectAmount) {
         return res.status(400).json({ message: 'Payment amount exceeds the remaining project balance.' });
       }
     }

@@ -52,7 +52,13 @@ const paymentMilestoneStatus = (payment) => {
     const percentage = title.match(/(\d{1,3})\s*%/);
     return percentage ? `${percentage[1]}% payment done` : `${title} paid`;
   }
-  if (payment.status === 'Pending') return `${title} submitted · awaiting verification`;
+  if (payment.status === 'Pending') {
+    if (/token/i.test(title)) return 'Token submitted · awaiting verification';
+    const percentage = title.match(/(\d{1,3})\s*%/);
+    return percentage
+      ? `${percentage[1]}% payment submitted · awaiting verification`
+      : `${title} submitted · awaiting verification`;
+  }
   return `${title} · ${String(payment.status || 'Unknown').toLowerCase()}`;
 };
 const EMPTY_PORTFOLIO = {
@@ -637,6 +643,7 @@ function AdminDashboard() {
               <div><span className="admin-eyebrow">CLIENT MEETINGS</span><h2>Consultations & Project Accounts</h2></div>
               <span>{consultations.length} requests</span>
             </div>
+            <p className="admin-help">Client payment submissions show here after refresh. Verify receipt in your account before marking each payment Completed; only verified amounts count as paid or reduce the project balance.</p>
             {!consultations.length ? <div className="admin-empty">No consultation bookings yet.</div> : (
               <div className="admin-card-list">
                 {consultations.map((consultation) => {
@@ -646,8 +653,11 @@ function AdminDashboard() {
                   });
                   const paid = linkedPayments.reduce((sum, payment) =>
                     sum + (payment.status === 'Completed' ? Number(payment.amountPaid || 0) : 0), 0);
+                  const pending = linkedPayments.reduce((sum, payment) =>
+                    sum + (payment.status === 'Pending' ? Number(payment.amountPaid || 0) : 0), 0);
                   const agreed = Number(consultation.agreedProjectAmount || 0);
                   const balance = Math.max(0, agreed - paid);
+                  const paidPercent = agreed > 0 ? Math.min(100, Math.round((paid / agreed) * 100)) : 0;
                   return (
                     <article className="admin-record-card" key={consultation._id}>
                       <div className="admin-record-head">
@@ -687,7 +697,8 @@ function AdminDashboard() {
 
                       <div className="admin-finance-summary">
                         <div><strong>Agreed total</strong><span>{agreed > 0 ? currency(agreed) : 'Not set'}</span></div>
-                        <div><strong>Received</strong><span>{currency(paid)}</span></div>
+                        <div><strong>Verified paid</strong><span>{currency(paid)}{agreed > 0 ? ` · ${paidPercent}%` : ''}</span></div>
+                        <div><strong>Awaiting verification</strong><span>{currency(pending)}</span></div>
                         <div><strong>Balance remaining</strong><span>{agreed > 0 ? currency(balance) : 'Set agreed total first'}</span></div>
                       </div>
                       <div className="admin-inline-controls">
@@ -713,15 +724,28 @@ function AdminDashboard() {
                           <span className="admin-payment-empty">No client payments submitted yet.</span>
                         ) : linkedPayments.map((payment) => (
                           <div key={payment._id}>
-                            <span>
-                              {paymentMilestoneStatus(payment)}
-                              {payment.createdAt ? ` · ${new Date(payment.createdAt).toLocaleDateString()}` : ''}
+                            <span className="admin-client-payment-details">
+                              <strong>{paymentMilestoneStatus(payment)}</strong>
+                              <small>
+                                {currency(payment.amountPaid)}
+                                {payment.createdAt ? ` · ${new Date(payment.createdAt).toLocaleDateString()}` : ''}
+                                {payment.notes ? ` · Client reference: ${payment.notes}` : ''}
+                              </small>
                             </span>
-                            <span>
-                              {currency(payment.amountPaid)}{' '}
+                            <span className="admin-client-payment-actions">
                               <span className={`admin-status ${String(payment.status || 'Pending').toLowerCase()}`}>
                                 {payment.status || 'Pending'}
                               </span>
+                              {payment.status === 'Pending' && (
+                                <button
+                                  className="admin-button secondary small"
+                                  type="button"
+                                  disabled={savingId === payment._id}
+                                  onClick={() => handlePaymentStatus(payment, 'Completed')}
+                                >
+                                  {savingId === payment._id ? 'Saving…' : 'Mark completed'}
+                                </button>
+                              )}
                             </span>
                           </div>
                         ))}
@@ -836,7 +860,11 @@ function AdminDashboard() {
                         <td><strong>{payment.clientName}</strong><br /><span>{payment.clientEmail}</span><br /><small>{payment.projectName}</small></td>
                         <td>{payment.createdAt ? new Date(payment.createdAt).toLocaleDateString() : '—'}<br /><small>{payment.milestoneTitle}</small></td>
                         <td>{currency(payment.amountPaid)}<br /><small>Project total {currency(payment.totalProjectAmount)}</small></td>
-                        <td>{payment.paymentMethod || '—'}<br /><small>{payment.transactionId}</small></td>
+                        <td>
+                          {payment.paymentMethod || '—'}<br />
+                          <small>{payment.transactionId}</small>
+                          {payment.notes && <><br /><small>Client reference: {payment.notes}</small></>}
+                        </td>
                         <td><span className={`admin-status ${String(payment.status || 'Pending').toLowerCase()}`}>{payment.status || 'Pending'}</span></td>
                         <td>
                           <select value={payment.status || 'Pending'} disabled={savingId === payment._id} aria-label={`Payment verification status for ${payment.clientEmail}`} onChange={(event) => handlePaymentStatus(payment, event.target.value)}>
