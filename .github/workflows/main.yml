@@ -119,8 +119,39 @@ jobs:
           rsync -az --exclude=node_modules --exclude=.env -e "ssh $ssh_options" \
             backend/ "$DEPLOY_USER@$DEPLOY_HOST:$BACKEND_DEPLOY_PATH/"
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd '$BACKEND_DEPLOY_PATH' && npm ci --omit=dev && (npx --yes pm2 delete interior-backend >/dev/null 2>&1 || true) && npx --yes pm2 start server.js --name interior-backend --update-env"
+            "$DEPLOY_USER@$DEPLOY_HOST" "BACKEND_DEPLOY_PATH='$BACKEND_DEPLOY_PATH' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$BACKEND_DEPLOY_PATH"
+          npm ci --omit=dev
+          npx --yes pm2 delete interior-backend >/dev/null 2>&1 || true
+
+          listener_pid=$(ss -lntp 2>/dev/null |
+            sed -n 's/.*127\.0\.0\.1:5000.*pid=\([0-9][0-9]*\).*/\1/p' | head -n 1)
+          if [[ -n "$listener_pid" ]]; then
+            listener_cwd=$(readlink "/proc/$listener_pid/cwd" 2>/dev/null || true)
+            listener_cmd=$(tr '\0' ' ' < "/proc/$listener_pid/cmdline" 2>/dev/null || true)
+            if [[ "$listener_cwd" != "$BACKEND_DEPLOY_PATH" || "$listener_cmd" != *"server.js"* ]]; then
+              echo "Port 5000 is held by an unexpected process; refusing to stop it."
+              exit 1
+            fi
+
+            echo "Stopping stale backend listener PID $listener_pid."
+            kill -TERM "$listener_pid"
+            for attempt in {1..10}; do
+              if ! ss -lntp 2>/dev/null | grep -q '127.0.0.1:5000'; then
+                break
+              fi
+              sleep 1
+            done
+            if ss -lntp 2>/dev/null | grep -q '127.0.0.1:5000'; then
+              echo "Stale backend listener did not stop; refusing to start another instance."
+              exit 1
+            fi
+          fi
+
+          npx --yes pm2 start "$BACKEND_DEPLOY_PATH/server.js" \
+            --cwd "$BACKEND_DEPLOY_PATH" --name interior-backend --update-env
+          REMOTE
 
       - name: Diagnose live API routing
         env:
