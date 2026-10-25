@@ -88,7 +88,6 @@ def main():
     if not re.fullmatch(r"/[A-Za-z0-9_./-]+", root) or "/../" in root or root.endswith("/.."):
         raise SystemExit("The discovered Nginx root is not a safe absolute path.")
 
-    print(f"::add-mask::{root}")
     print(f"root={root}")
 
 
