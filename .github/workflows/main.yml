@@ -126,17 +126,31 @@ jobs:
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          BACKEND_DEPLOY_PATH: ${{ vars.BACKEND_DEPLOY_PATH }}
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST" 'set +e
-              echo "--- Nginx API routing directives ---"
-              (sudo -n nginx -T 2>/dev/null || nginx -T 2>/dev/null) |
-                grep -E "^[[:space:]]*(listen|server_name|location[[:space:]]+/api|proxy_pass|limit_except|allow|deny)" || true
-              echo "--- PM2 app identity ---"
-              npx --yes pm2 describe interior-backend | grep -E "status|script path|exec cwd|pid" || true
-              echo "--- Backend route status on port 5000 (401 means route exists) ---"
-              curl -sS -o /dev/null -w "%{http_code}\n" --max-time 5 -X DELETE "http://127.0.0.1:5000/api/clients/probe%40example.com/data" || true'
+            "$DEPLOY_USER@$DEPLOY_HOST" "BACKEND_DEPLOY_PATH='$BACKEND_DEPLOY_PATH' bash -s" <<'REMOTE'
+          set +e
+          echo "--- Nginx API routing directives ---"
+          (sudo -n nginx -T 2>/dev/null || nginx -T 2>/dev/null) |
+            grep -E "^[[:space:]]*(listen|server_name|location[[:space:]]+/api|proxy_pass|limit_except|allow|deny)" || true
+          echo "--- PM2 app identity ---"
+          npx --yes pm2 describe interior-backend | grep -E "status|script path|exec cwd|pid" || true
+          echo "--- Deployed route source ---"
+          grep -nF "app.delete('/api/clients/:email/data'" "$BACKEND_DEPLOY_PATH/server.js" || true
+          echo "--- Node listeners ---"
+          (sudo -n ss -lntp 2>/dev/null || ss -lntp 2>/dev/null) |
+            grep -E "node|:5000|:5001|:3000|:4000" || true
+          echo "--- Backend route status on likely upstream ports (401 means route exists) ---"
+          for port in 5000 5001 3000 4000; do
+            printf "%s: " "$port"
+            curl -sS -o /dev/null -w "%{http_code}\n" --max-time 3 -X DELETE "http://127.0.0.1:$port/api/clients/probe%40example.com/data" || true
+          done
+          echo "--- PM2 startup port ---"
+          npx --yes pm2 logs interior-backend --lines 40 --nostream 2>&1 |
+            grep -E "Server running on port" | tail -n 3 || true
+          REMOTE
 
       - name: Resolve Nginx frontend root
         id: nginx-root
@@ -163,13 +177,16 @@ jobs:
             "sudo -n tar --no-same-owner -xzf - -C '$NGINX_ROOT'"
 
       - name: Verify live delete route
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
           set -euo pipefail
-          status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
-            --retry 5 --retry-delay 2 --retry-connrefused --max-time 10 \
-            --request DELETE 'https://13.62.168.145/api/clients/probe%40example.com/data')
+          status=$(ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            'curl --silent --show-error --output /dev/null --write-out "%{http_code}" --max-time 10 --request DELETE http://127.0.0.1:5000/api/clients/probe%40example.com/data')
           if [[ "$status" != "401" ]]; then
-            echo "Expected the live admin route to return 401 without credentials; got HTTP $status."
+            echo "Expected the backend admin route to return 401 without credentials; got HTTP $status."
             exit 1
           fi
-          echo "Live delete route is present and protected (HTTP 401 without credentials)."
+          echo "Backend delete route is present and protected (HTTP 401 without credentials)."
