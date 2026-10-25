@@ -58,7 +58,7 @@ jobs:
 
   deploy:
     name: Deploy to Production Server
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.ref == 'refs/heads/main'
     needs: [backend-test, frontend-build]
     runs-on: ubuntu-latest
     steps:
@@ -77,7 +77,6 @@ jobs:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-          FRONTEND_DEPLOY_PATH: ${{ vars.FRONTEND_DEPLOY_PATH }}
           BACKEND_DEPLOY_PATH: ${{ vars.BACKEND_DEPLOY_PATH }}
         run: |
           set -euo pipefail
@@ -85,16 +84,14 @@ jobs:
           test -n "$DEPLOY_USER" || { echo "Missing DEPLOY_USER secret"; exit 1; }
           test -n "$DEPLOY_SSH_KEY" || { echo "Missing DEPLOY_SSH_KEY secret"; exit 1; }
           test -n "$DEPLOY_KNOWN_HOSTS" || { echo "Missing DEPLOY_KNOWN_HOSTS secret"; exit 1; }
-          for deploy_path in "$FRONTEND_DEPLOY_PATH" "$BACKEND_DEPLOY_PATH"; do
-            [[ "$deploy_path" =~ ^/[A-Za-z0-9_./-]+$ ]] || {
-              echo "Deployment paths must be absolute paths containing only letters, numbers, _, ., /, or -."
-              exit 1
-            }
-            [[ "$deploy_path" != *"/../"* && "$deploy_path" != */.. ]] || {
-              echo "Deployment paths must not contain parent-directory segments."
-              exit 1
-            }
-          done
+          [[ "$BACKEND_DEPLOY_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]] || {
+            echo "BACKEND_DEPLOY_PATH must be an absolute Linux path containing only letters, numbers, _, ., /, or -."
+            exit 1
+          }
+          [[ "$BACKEND_DEPLOY_PATH" != *"/../"* && "$BACKEND_DEPLOY_PATH" != */.. ]] || {
+            echo "BACKEND_DEPLOY_PATH must not contain parent-directory segments."
+            exit 1
+          }
 
       - name: Configure SSH
         env:
@@ -108,22 +105,43 @@ jobs:
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Deploy Frontend and Backend
+      - name: Deploy Backend
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          FRONTEND_DEPLOY_PATH: ${{ vars.FRONTEND_DEPLOY_PATH }}
           BACKEND_DEPLOY_PATH: ${{ vars.BACKEND_DEPLOY_PATH }}
         run: |
           set -euo pipefail
           ssh_options="-i $HOME/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes"
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "mkdir -p '$FRONTEND_DEPLOY_PATH' '$BACKEND_DEPLOY_PATH'"
-          rsync -az -e "ssh $ssh_options" \
-            frontend-dist/ "$DEPLOY_USER@$DEPLOY_HOST:$FRONTEND_DEPLOY_PATH/"
+            "mkdir -p '$BACKEND_DEPLOY_PATH'"
           rsync -az --exclude=node_modules --exclude=.env -e "ssh $ssh_options" \
             backend/ "$DEPLOY_USER@$DEPLOY_HOST:$BACKEND_DEPLOY_PATH/"
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "cd '$BACKEND_DEPLOY_PATH' && npm ci --omit=dev && (npx --yes pm2 describe interior-backend >/dev/null 2>&1 && npx --yes pm2 reload interior-backend --update-env || npx --yes pm2 start server.js --name interior-backend)"
+
+      - name: Resolve Nginx frontend root
+        id: nginx-root
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            'sudo -n nginx -T 2>/dev/null || nginx -T 2>/dev/null' > "$RUNNER_TEMP/nginx.conf"
+          python3 .github/scripts/resolve-nginx-root.py < "$RUNNER_TEMP/nginx.conf" >> "$GITHUB_OUTPUT"
+
+      - name: Publish frontend to Nginx root
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          NGINX_ROOT: ${{ steps.nginx-root.outputs.root }}
+        run: |
+          set -euo pipefail
+          tar -czf - -C frontend-dist . | ssh -i ~/.ssh/deploy_key \
+            -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "sudo -n tar --no-same-owner -xzf - -C '$NGINX_ROOT'"
