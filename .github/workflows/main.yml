@@ -120,7 +120,7 @@ jobs:
             backend/ "$DEPLOY_USER@$DEPLOY_HOST:$BACKEND_DEPLOY_PATH/"
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd '$BACKEND_DEPLOY_PATH' && npm ci --omit=dev && (npx --yes pm2 describe interior-backend >/dev/null 2>&1 && npx --yes pm2 reload interior-backend --update-env || npx --yes pm2 start server.js --name interior-backend)"
+            "cd '$BACKEND_DEPLOY_PATH' && npm ci --omit=dev && (npx --yes pm2 delete interior-backend >/dev/null 2>&1 || true) && npx --yes pm2 start server.js --name interior-backend --update-env"
 
       - name: Diagnose live API routing
         env:
@@ -132,9 +132,9 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST" 'set +e
               echo "--- Nginx API routing directives ---"
               (sudo -n nginx -T 2>/dev/null || nginx -T 2>/dev/null) |
-                grep -E "^[[:space:]]*(listen|server_name|location[[:space:]]+/api|proxy_pass)" || true
+                grep -E "^[[:space:]]*(listen|server_name|location[[:space:]]+/api|proxy_pass|limit_except|allow|deny)" || true
               echo "--- PM2 app identity ---"
-              pm2 describe interior-backend | grep -E "status|script path|exec cwd|pid" || true
+              npx --yes pm2 describe interior-backend | grep -E "status|script path|exec cwd|pid" || true
               echo "--- Backend route status on port 5000 (401 means route exists) ---"
               curl -sS -o /dev/null -w "%{http_code}\n" --max-time 5 -X DELETE "http://127.0.0.1:5000/api/clients/probe%40example.com/data" || true'
 
