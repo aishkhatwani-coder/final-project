@@ -142,10 +142,14 @@ jobs:
           echo "--- Node listeners ---"
           (sudo -n ss -lntp 2>/dev/null || ss -lntp 2>/dev/null) |
             grep -E "node|:5000|:5001|:3000|:4000" || true
-          echo "--- Backend route status on likely upstream ports (401 means route exists) ---"
-          for port in 5000 5001 3000 4000; do
-            printf "%s: " "$port"
-            curl -sS -o /dev/null -w "%{http_code}\n" --max-time 3 -X DELETE "http://127.0.0.1:$port/api/clients/probe%40example.com/data" || true
+          echo "--- Backend DELETE route matching on Nginx upstream ---"
+          for path in \
+            "/api/clients/probe/data" \
+            "/api/clients/probe@example.com/data" \
+            "/api/clients/probe%40example.com/data" \
+            "/api/orders/000000000000000000000000"; do
+            printf "%s: " "$path"
+            curl -sS -o /dev/null -w "%{http_code}\n" --max-time 3 -X DELETE "http://127.0.0.1:5000$path" || true
           done
           echo "--- PM2 startup port ---"
           npx --yes pm2 logs interior-backend --lines 40 --nostream 2>&1 |
